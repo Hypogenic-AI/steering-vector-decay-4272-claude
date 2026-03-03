@@ -1,0 +1,117 @@
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Why Is Decay Instantaneous?}
+
+Our results show that the model completely absorbs a steering perturbation within
+a single forward pass. We attribute this to two architectural features.
+
+First, \textbf{LayerNorm re-normalizes activations} at each layer. When a
+steering vector shifts the hidden state's direction and magnitude, subsequent
+LayerNorm operations project the result back toward the learned activation
+distribution. \citet{dang2026selective} identify this norm-distortion mechanism
+and show that it compounds across layers. Our results confirm that by the time
+the perturbed hidden state has passed through the remaining layers above the
+injection point, the normalization has completely absorbed the perturbation.
+
+Second, \textbf{residual connections and the learned weight matrices} implement
+a form of manifold projection. \citet{xu2026why} propose that model activations
+lie on a low-dimensional manifold and that subsequent layers project perturbed
+activations back onto this manifold. Our finding that decay is instantaneous
+regardless of perturbation magnitude (multiplier ablation) or duration (duration
+ablation) is consistent with this view: the projection is strong enough to
+absorb even $5\times$ perturbations in a single step.
+
+\subsection{Representational vs.\ Behavioral Persistence}
+
+The dissociation between representational decay and behavioral persistence is
+the most practically significant finding. Hidden states forget the steering
+vector immediately, but the tokens generated under steering remain in the
+context window and continue to influence the model's output distribution. This
+behavioral persistence has a half-life exceeding 75~tokens (\figref{fig:behavioral})---two orders of
+magnitude longer than the representational half-life of less than one token.
+
+This finding aligns with the Bayesian framework of \citet{bigelow2025belief}:
+the steering vector shifts the model's prior, which then gets ``baked into'' the
+generated tokens. Once those tokens are in the context, they provide ongoing
+evidence for the steered behavior, sustaining it even after the representational
+prior shift has been completely absorbed. The \TFclean condition confirms this
+interpretation: when unsteered tokens replace the steered tokens in context,
+all behavioral effects disappear.
+
+\subsection{Implications for Practitioners}
+
+\para{Continuous application is necessary, not just robust.}
+Our results explain why standard methods like \caa apply steering vectors at
+every token position. This is not merely a conservative design choice---it is
+necessary because a single-application perturbation is fully absorbed within one
+step. Practitioners cannot reduce computational cost by applying vectors
+intermittently.
+
+\para{Brief steering can have lasting behavioral effects.}
+Despite the instantaneous representational decay, even brief steering ($K = 1$
+to $3$ tokens) at the start of generation can create lasting behavioral effects
+through the generated token sequence. If the goal is to set a behavioral
+trajectory rather than maintain continuous representational alignment, short
+initial steering may suffice.
+
+\para{The token sequence is the primary control surface.}
+Our results suggest that for long-term behavioral control, the generated token
+sequence---not hidden state manipulation---is the most durable mechanism.
+Methods that operate through the context window (\eg prompt engineering, few-shot
+examples) may produce more persistent effects than activation-level
+interventions.
+
+\subsection{Implications for Theory}
+
+Our findings inform several theoretical questions about steering:
+
+\para{Steering as dynamic bias.}
+\citet{xu2026why} characterize steering as adding a dynamic bias to model
+weights. Our results show that this bias has no temporal memory: it affects
+only the forward pass in which it is applied. Each forward pass is
+independent---the model does not accumulate or propagate the bias across steps.
+
+\para{The PID framework.}
+\citet{nguyen2025pid} frame standard steering as P-control with inherent
+steady-state error. Our results sharpen this analysis: the ``steady-state error''
+of a removed P-controller is 100\%. The integral term in PID steering is not
+merely reducing error---it is providing the \emph{entire} persistent signal,
+since the proportional term contributes nothing once removed.
+
+\para{Transformer robustness.}
+The instantaneous absorption of perturbations---even at $5\times$ the default
+multiplier---suggests that transformer hidden states are remarkably robust. The
+model's learned dynamics actively resist deviation from the natural activation
+manifold, which may have implications beyond steering for understanding
+adversarial robustness and representation stability.
+
+\subsection{Limitations}
+
+\para{Single model.}
+We test only \gptxl. Larger models with more layers, different normalization
+schemes (RMSNorm vs.\ LayerNorm), or different architectures may show different
+decay dynamics. In particular, models with more layers may show slower decay
+if the manifold projection is weaker.
+
+\para{Single injection layer.}
+We inject at one layer per experiment. Multi-layer steering, as used in standard
+\caa, applies vectors at multiple layers simultaneously and may produce
+different decay patterns due to reinforcement across layers.
+
+\para{Greedy decoding.}
+We use argmax decoding throughout. Sampling-based decoding introduces
+stochasticity that could interact with decay dynamics, potentially amplifying
+or dampening the effect of steered tokens in context.
+
+\para{Hidden state measurement at injection layer only.}
+We measure cosine similarity at the injection layer. The perturbation may
+propagate to other layers with different dynamics, though the output-level KL
+divergence results (which reflect all-layer effects) are consistent with
+instantaneous decay.
+
+\para{Small contrastive sets.}
+We use 20 contrastive pairs per behavior, which is on the lower end for steering
+vector extraction. Larger sets could produce more robust vectors with
+potentially different decay properties, though we see consistent results across
+all three behaviors tested.

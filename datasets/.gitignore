@@ -1,0 +1,19 @@
+# Large dataset files - download using instructions in README.md
+*.parquet
+*.arrow
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# HuggingFace cache
+.cache/
+
+# Keep JSONL and CSV files (small enough for git)
+# !*.jsonl
+# !*.csv
+
+# Keep the catalog and README
+!README.md
+!dataset_catalog.md
+!.gitignore

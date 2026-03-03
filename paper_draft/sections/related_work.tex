@@ -1,0 +1,75 @@
+\section{Related Work}
+\label{sec:related_work}
+
+\para{Activation steering.}
+The linear representation hypothesis~\citep{park2023linear,marks2023geometry}
+posits that high-level concepts correspond to approximately linear directions
+in transformer activation space. \actadd~\citep{turner2023actadd} exploits this
+by computing a steering vector from the activation difference between a positive
+and negative prompt pair and adding it at a single layer during the forward pass.
+\caa~\citep{panickssery2024caa} extends this to use mean-difference vectors from
+hundreds of contrastive pairs, applied at all token positions after the
+instruction. The design choice of continuous injection implicitly acknowledges
+that single-application steering would decay, though neither work measures this
+directly. Representation Engineering~\citep{zou2023repe} provides a broader
+framework for reading and writing model representations, treating steering as
+manipulating a learned representation space.
+
+\para{Evidence for steering decay.}
+Several papers provide indirect evidence that steering effects diminish during
+generation. \citet{li2026svf} demonstrate that static steering vectors become
+misaligned during autoregressive generation because hidden states drift through
+activation space, causing reliability to degrade in long-form generation. They
+propose Steering Vector Fields (\svf), which re-compute the steering direction
+from the current hidden state every $K$ steps. \citet{nguyen2025pid} formalize
+steering as a control theory problem and prove that proportional-only control
+(equivalent to standard activation addition) has inherent steady-state error.
+Their PID controller adds integral and derivative terms to counteract this error.
+\citet{bigelow2025belief} model steering through a Bayesian lens, where the
+steering vector shifts a concept prior that can be overridden by evidence
+accumulated during generation. Unlike these works, which propose solutions
+to decay, we directly measure the decay dynamics themselves.
+
+\para{Mechanisms of decay.}
+Several mechanisms have been proposed for how perturbations are absorbed.
+\citet{xu2026why} argue that model activations lie on a low-dimensional manifold,
+and subsequent layers project perturbed activations back onto this manifold.
+\citet{dang2026selective} identify norm distortion as a specific mechanism:
+adding a steering vector violates activation norms expected by LayerNorm,
+causing distribution shift that compounds across layers. They propose
+norm-preserving rotation as an alternative. The Hidden Life of
+Tokens~\citep{hiddentokens2025} shows that information injected into hidden
+states diminishes as more tokens are generated, suggesting that perturbations
+are naturally attenuated by the autoregressive process.
+
+\para{Behavioral persistence and error propagation.}
+\citet{bachmann2024pitfalls} establish that small perturbations in hidden states
+can compound through autoregressive generation due to the teacher-forcing gap.
+This suggests competing effects: the steering perturbation may decay in hidden
+states, but behavioral changes caused by early steered tokens may persist as
+the model conditions on its own outputs.
+Our experimental design explicitly separates these two effects by comparing
+autoregressive generation (where both operate) with teacher-forced conditions
+(where only representational decay is measured).
+
+\para{Counteracting decay.}
+Beyond continuous injection~\citep{panickssery2024caa},
+methods include context-dependent refreshing~\citep{li2026svf},
+PID control~\citep{nguyen2025pid},
+conditional steering~\citep{lee2024cast},
+semantics-adaptive intervention~\citep{wang2024sadi},
+norm-preserving rotation~\citep{dang2026selective},
+SAE-targeted steering~\citep{chalnev2024saesteer},
+and KV cache steering~\citep{kvcache2025}.
+Our work complements these by characterizing the problem they address:
+we show that without continuous reinforcement, steering influence is lost
+within a single step, motivating the need for these approaches.
+
+\para{Evaluation of steering.}
+\citet{pres2024reliable} demonstrate that multiple-choice evaluations can
+overstate steering success and that long-form generation is a stricter test.
+\citet{tan2024steerability} and \citet{bas2025limits} show that steerability
+varies across concepts and follows an inverted-U curve with steering strength.
+These findings motivate our choice to evaluate across multiple behaviors and to
+measure both short-term (hidden state) and long-term (output distribution)
+effects.

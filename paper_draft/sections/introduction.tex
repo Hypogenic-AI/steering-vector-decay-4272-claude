@@ -1,0 +1,63 @@
+\section{Introduction}
+\label{sec:introduction}
+
+Activation steering has emerged as a lightweight method for controlling language
+model behavior without fine-tuning~\citep{turner2023actadd,panickssery2024caa,zou2023repe}.
+By adding a learned direction vector to a model's hidden states during the forward
+pass, practitioners can increase truthfulness, reduce toxicity, or shift stylistic
+register. The approach is attractive because it requires no gradient updates,
+operates at inference time, and needs only a small set of contrastive examples
+to extract a steering direction.
+
+A natural question arises: must steering vectors be applied at every token
+position, or can brief application produce lasting effects? Standard methods
+such as Contrastive Activation Addition~\citep{panickssery2024caa} inject
+vectors continuously, implicitly assuming that the effect would not persist
+without reinforcement. Yet no prior work has directly measured how quickly
+steering influence dissipates after the vector is removed. Understanding this
+decay is important for three reasons. First, practitioners want to minimize
+computational overhead by applying vectors only when needed. Second, the decay
+rate reveals how the model processes and absorbs perturbations to its internal
+representations. Third, the distinction between representational decay (hidden
+states reverting to their natural trajectory) and behavioral persistence
+(generated tokens maintaining influence through the context) has direct
+implications for steering method design.
+
+We provide the first empirical characterization of post-removal steering vector
+decay. Using \gptxl (1.5B parameters) and TransformerLens~\citep{nanda2022transformerlens},
+we extract steering vectors for three behavioral dimensions---truthfulness,
+positive sentiment, and formal style---via contrastive activation addition.
+We then apply each vector for the first $K$ tokens of generation, remove it,
+and measure hidden state dynamics token-by-token for 20 subsequent tokens.
+We compare six conditions: no steering, continuous steering, autoregressive
+generation after removal (\AR), teacher-forced generation with the same steered
+tokens (\TF), teacher-forced generation with unsteered tokens (\TFclean), and a
+random-vector control.
+
+Our central finding is that representational decay is \emph{instantaneous}.
+The cosine similarity delta between steered and unsteered hidden states drops
+from ${\sim}0.019$ to ${\sim}0.000$ within a single generation step after
+steering removal. This result is consistent across all three behaviors, all
+layers tested (8, 16, 24, 32), all multiplier strengths (1--5$\times$), and
+all steering durations ($K{=}1$ to $K{=}10$). Autoregressive and teacher-forced
+conditions produce identical hidden states (Cohen's $d = 0.000$), confirming
+that the model retains no hidden state memory of the perturbation. Yet
+behavioral effects persist: the KL divergence between the steered model's
+output distribution and the unsteered baseline remains elevated for many tokens,
+with a half-life exceeding 75 tokens (\figref{fig:behavioral}). This persistence vanishes entirely under
+the \TFclean condition, where unsteered tokens replace the steered context,
+confirming that behavioral influence is carried by the generated token sequence
+rather than by hidden state dynamics.
+
+We make the following contributions:
+\begin{itemize}[leftmargin=*,itemsep=0pt,topsep=0pt]
+    \item We present the first token-by-token measurement of steering vector
+    decay dynamics, showing that representational influence is absorbed within
+    a single forward pass.
+    \item We decompose steering persistence into representational and behavioral
+    components, demonstrating that behavioral effects operate entirely through
+    the autoregressive token feedback loop.
+    \item We conduct comprehensive ablations across layers, multiplier strengths,
+    steering durations, and behavioral dimensions, establishing the universality
+    of instantaneous representational decay.
+\end{itemize}

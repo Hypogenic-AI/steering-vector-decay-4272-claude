@@ -1,0 +1,30 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented the first direct measurement of steering vector decay dynamics in
+language models. Our experiments on \gptxl across three behavioral dimensions
+reveal that representational decay is instantaneous: within a single generation
+step after steering removal, hidden states at the injection layer are
+indistinguishable from those of an unsteered model. This finding is universal
+across all layers, multiplier strengths, and steering durations tested.
+
+The key insight is that steering influence decomposes into two components with
+vastly different timescales. Representational influence (hidden state alignment
+with the steering direction) has a half-life of less than one token. Behavioral
+influence (divergence of output distributions from the unsteered baseline)
+persists for over 75~tokens, but operates entirely through the autoregressive
+token feedback loop---not through hidden state dynamics.
+
+These findings have direct practical implications: continuous vector application
+is necessary for sustained representational steering, and the generated token
+sequence is the primary carrier of long-term behavioral influence. For
+theorists, the instantaneous absorption of perturbations reveals that
+transformer hidden states are remarkably robust, with normalization and residual
+connections projecting perturbed states back onto the natural activation
+manifold within a single forward pass.
+
+Future work should test whether these dynamics hold for larger models, whether
+multi-layer steering creates more persistent effects, and whether alternative
+injection targets (\eg key-value caches) exhibit different decay properties.
+Understanding decay across architectures and scales will be essential for
+designing efficient and reliable steering methods.

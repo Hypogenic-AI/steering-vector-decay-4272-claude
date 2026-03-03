@@ -1,0 +1,22 @@
+Activation steering---adding learned direction vectors to model hidden states---is
+increasingly used to control language model behavior at inference time. Standard
+practice applies steering vectors at every token position, but the temporal
+dynamics of steering influence remain poorly understood: if a vector is applied
+briefly and then removed, how quickly does its effect on hidden states dissipate?
+We present the first direct empirical characterization of post-removal steering
+vector decay. Using \gptxl and contrastive activation addition across three
+behavioral dimensions (truthfulness, sentiment, formality), we measure
+token-by-token cosine similarity and KL divergence after steering removal.
+Our central finding is that representational decay is \emph{instantaneous}:
+within a single generation step, hidden states at the steered layer revert
+to values indistinguishable from an unsteered model ($\Delta$~cosine similarity
+drops from ${\sim}0.019$ to ${\sim}0.000$). This result holds across all layers,
+multiplier strengths, and steering durations tested. Crucially, autoregressive
+and teacher-forced conditions produce \emph{identical} hidden states (Cohen's
+$d = 0.000$), demonstrating that the model retains no hidden state memory of the
+steering intervention. Behavioral effects persist solely through the tokens
+generated under steering, which remain in the context and influence subsequent
+generation. These findings establish that continuous vector application is
+necessary for sustained representational steering and that the autoregressive
+token sequence, not hidden state momentum, is the primary carrier of steering
+influence.

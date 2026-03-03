@@ -1,0 +1,120 @@
+\section{Methodology}
+\label{sec:methodology}
+
+We describe our experimental setup for measuring steering vector decay dynamics,
+including model selection, steering vector extraction, experimental conditions,
+and evaluation metrics.
+
+\subsection{Model and Infrastructure}
+\label{sec:model}
+
+We use \gptxl (1.5B parameters, 48 layers, $d_{\text{model}} = 1600$), loaded
+via TransformerLens~\citep{nanda2022transformerlens} in float16 on an NVIDIA
+RTX~A6000 GPU (49~GB VRAM). We select \gptxl because it is well-supported by
+TransformerLens, fits on a single GPU, and was used in the original \actadd
+paper~\citep{turner2023actadd}. All generation uses greedy decoding (argmax)
+with a fixed random seed of 42 for reproducibility.
+
+\subsection{Steering Vector Extraction}
+\label{sec:extraction}
+
+We construct contrastive pairs for three behavioral dimensions: truthfulness
+(20~pairs of true vs.\ false factual statements), positive sentiment
+(20~pairs of positive vs.\ negative evaluative language), and formal style
+(20~pairs of formal vs.\ informal register). Each pair consists of semantically
+similar sentences differing primarily in the target dimension (\eg ``The Earth
+revolves around the Sun'' vs.\ ``The Sun revolves around the Earth'' for
+truthfulness).
+
+For each behavior and target layer $\ell$, we compute the mean activation of
+the last token across all positive and negative examples, then take the
+normalized difference:
+\begin{equation}
+\steeringvec^{(\ell)} = \frac{\bar{\vh}^{+}_{(\ell)} - \bar{\vh}^{-}_{(\ell)}}
+{\|\bar{\vh}^{+}_{(\ell)} - \bar{\vh}^{-}_{(\ell)}\|}
+\label{eq:sv_extraction}
+\end{equation}
+where $\bar{\vh}^{+}_{(\ell)}$ and $\bar{\vh}^{-}_{(\ell)}$ are the mean
+activations at layer $\ell$ for the positive and negative examples, respectively.
+
+\subsection{Experimental Conditions}
+\label{sec:conditions}
+
+We generate continuations from 25 diverse open-ended prompts (\eg ``The most
+important thing to remember is that''), designed to be neutral with respect to
+all behavioral dimensions. For each prompt, we run six conditions:
+
+\begin{enumerate}[leftmargin=*,itemsep=1pt,topsep=2pt]
+\item \textbf{No Steering} (baseline): Normal generation with no vector applied.
+\item \textbf{Continuous Steering}: Vector $\alpha \cdot \steeringvec$ added at
+      every token position, where $\alpha$ is the multiplier strength.
+\item \textbf{AR} (Autoregressive): Vector applied for the first $K$ tokens,
+      then free generation without the vector.
+\item \textbf{TF} (Teacher-Forced, steered tokens): Vector applied for $K$
+      tokens, then the same tokens that \AR generated are fed as input, but
+      without the vector.
+\item \textbf{TF-Clean} (Teacher-Forced, clean tokens): Vector applied for $K$
+      tokens, then tokens from the unsteered baseline are fed without the vector.
+\item \textbf{Random} (control): A random unit vector with the same multiplier
+      applied for $K$ tokens, then free generation.
+\end{enumerate}
+
+The \TF condition tests whether the model retains any hidden state memory of
+the steering intervention beyond what the generated tokens encode. The \TFclean
+condition tests whether behavioral persistence requires the steered tokens to
+remain in context.
+
+\subsection{Metrics}
+\label{sec:metrics}
+
+At each token position $t$ after steering removal, we record four metrics:
+
+\para{Cosine similarity delta ($\Delta$cos).}
+We compute the cosine similarity between the hidden state $\vh_t$ at layer
+$\ell$ and the steering vector $\steeringvec$, then subtract the corresponding
+value from the unsteered baseline:
+\begin{equation}
+\Delta\cossim(t) = \cos(\vh^{\text{steered}}_t, \steeringvec) -
+                    \cos(\vh^{\text{unsteered}}_t, \steeringvec)
+\label{eq:delta_cos}
+\end{equation}
+This isolates the steering-specific effect from natural variation in hidden
+state alignment.
+
+\para{Projection magnitude.}
+The scalar projection of the hidden state onto the steering direction:
+$\text{proj}(t) = \vh_t \cdot \steeringvec$.
+
+\para{KL divergence from unsteered baseline.}
+$\KL(p_t^{\text{steered}} \,\|\, p_t^{\text{unsteered}})$, measuring how
+different the output distribution at position $t$ is from the unsteered model.
+
+\para{KL divergence from steered baseline.}
+$\KL(p_t^{\text{condition}} \,\|\, p_t^{\text{continuous}})$, measuring
+divergence from the continuously steered model.
+
+\subsection{Default Hyperparameters}
+\label{sec:hyperparams}
+
+Unless otherwise noted, we use a steering multiplier of $\alpha = 3.0$,
+injection at layer $\ell = 24$ (the middle layer), and steering duration
+$K = 3$ tokens. These are standard values from the \caa
+literature~\citep{panickssery2024caa}. We generate 20 post-steering tokens
+for decay measurement.
+
+\subsection{Ablation Design}
+\label{sec:ablation_design}
+
+We systematically vary three parameters:
+
+\begin{itemize}[leftmargin=*,itemsep=1pt,topsep=2pt]
+\item \textbf{Layer}: $\ell \in \{8, 16, 24, 32\}$, spanning early to late
+      layers.
+\item \textbf{Multiplier}: $\alpha \in \{1.0, 2.0, 3.0, 5.0\}$, covering
+      weak to strong steering.
+\item \textbf{Duration}: $K \in \{1, 3, 5, 10\}$, testing whether longer
+      steering creates accumulated effects.
+\end{itemize}
+
+Each ablation varies one parameter while holding the others at their default
+values, using the positive sentiment behavior and 10 prompts per condition.

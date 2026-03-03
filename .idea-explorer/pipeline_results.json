@@ -1,0 +1,27 @@
+{
+  "success": true,
+  "stages": {
+    "resource_finder": {
+      "success": true,
+      "completion_marker": "/workspaces/steering-vector-decay-4272-claude/.resource_finder_complete",
+      "outputs": {
+        "literature_review": "/workspaces/steering-vector-decay-4272-claude/literature_review.md",
+        "resources_catalog": "/workspaces/steering-vector-decay-4272-claude/resources.md",
+        "papers_dir": "/workspaces/steering-vector-decay-4272-claude/papers",
+        "datasets_dir": "/workspaces/steering-vector-decay-4272-claude/datasets",
+        "code_dir": "/workspaces/steering-vector-decay-4272-claude/code"
+      },
+      "log_file": "/workspaces/steering-vector-decay-4272-claude/logs/resource_finder_claude.log",
+      "transcript_file": "/workspaces/steering-vector-decay-4272-claude/logs/resource_finder_claude_transcript.jsonl",
+      "elapsed_time": 1724.9821112155914
+    },
+    "experiment_runner": {
+      "success": true,
+      "return_code": 0,
+      "elapsed_time": 3803.703677177429,
+      "log_file": "/workspaces/steering-vector-decay-4272-claude/logs/execution_claude.log",
+      "transcript_file": "/workspaces/steering-vector-decay-4272-claude/logs/execution_claude_transcript.jsonl"
+    }
+  },
+  "work_dir": "/workspaces/steering-vector-decay-4272-claude"
+}

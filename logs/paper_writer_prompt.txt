@@ -1,0 +1,981 @@
+You are an academic paper writer. Generate a complete NEURIPS style paper
+based on the experiment results provided.
+
+════════════════════════════════════════════════════════════════════════════════
+                         IMPORTANT: BEFORE YOU START
+════════════════════════════════════════════════════════════════════════════════
+
+Before writing any content, you MUST complete these steps:
+
+1. READ THE SKILL: Review the paper-writer skill at .claude/skills/paper-writer/SKILL.md
+2. READ THE STYLE GUIDE: Study templates/paper_writing/lab_style_guide.md carefully
+3. REVIEW EXAMPLES: Browse paper_examples/ for formatting and language patterns:
+   - Look at sections/1.introduction.tex for language style
+   - Look at tables/*.tex for table formatting
+   - Look at commands/*.tex for macro usage
+4. VERIFY COMMAND TEMPLATES: Command templates (math.tex, general.tex, macros.tex) are pre-copied to paper_draft/commands/
+
+CRITICAL: Reference example papers for FORMATTING and LANGUAGE STYLE only.
+Do NOT copy content, phrasing, or narrative structure from the example papers.
+The examples are in a different research domain - focus only on presentation style.
+
+════════════════════════════════════════════════════════════════════════════════
+                            EXPERIMENT REPORT
+════════════════════════════════════════════════════════════════════════════════
+
+# Steering Vector Decay: How Quickly Do Hidden States Forget?
+
+## 1. Executive Summary
+
+**Research question:** After applying a steering vector v for the first K tokens of generation and then removing it, how quickly does v&#39;s influence on model hidden states decay?
+
+**Key finding:** Representational decay is **essentially instantaneous** — within a single generation step after steering removal, hidden states at the steered layer revert to values indistinguishable from an unsteered model. However, behavioral effects persist through the tokens already generated under steering, creating lasting changes in model output distributions even after representational alignment is lost.
+
+**Practical implications:** Steering vectors do not create persistent &#34;memory&#34; in hidden states. Their lasting behavioral effects work entirely through the autoregressive feedback loop — steered tokens influence future generation through the context, not through residual hidden state perturbation. This means (1) continuous application is necessary for sustained representational steering, (2) the generated token sequence is the primary carrier of steering influence, and (3) teacher-forcing unsteered tokens completely eliminates all steering effects.
+
+## 2. Goal
+
+We tested the hypothesis that activation steering vector influence decays over subsequent generation steps after removal, and that this decay rate differs between autoregressive generation and teacher-forced conditions. The question was posed by the user: &#34;If you add v for the first three tokens of generation, and then stop, how quickly do hidden states stop looking like v? How does this change if you teacher-force the tokens generated with v but don&#39;t add them to the hidden state?&#34;
+
+This matters because:
+- Practitioners need to know whether occasional steering application is sufficient, or whether continuous injection is required
+- Theorists want to understand how models process and &#34;wash out&#34; perturbations to their hidden states
+- The distinction between representational decay and behavioral persistence informs steering method design
+
+## 3. Data Construction
+
+### Dataset Description
+We constructed contrastive pairs for three behavioral directions:
+
+| Behavior | # Pairs | Description |
+|----------|---------|-------------|
+| **truthful** | 20 | True vs. false factual statements |
+| **positive_sentiment** | 20 | Positive vs. negative evaluative language |
+| **formal_style** | 20 | Formal vs. informal register |
+
+Each pair consists of semantically similar sentences differing primarily in the target behavioral dimension (e.g., &#34;The Earth revolves around the Sun&#34; vs. &#34;The Sun revolves around the Earth&#34;).
+
+### Generation Prompts
+25 diverse open-ended prompts were used for generation experiments (e.g., &#34;The most important thing to remember is that&#34;, &#34;In my experience, I have found that&#34;). These were designed to be neutral regarding all behavioral dimensions.
+
+### Data Quality
+- All contrastive pairs were manually constructed to be minimal pairs (differing only in the target dimension)
+- No missing values or outliers
+- Prompts selected to be behavior-neutral
+
+## 4. Experiment Description
+
+### Methodology
+
+#### High-Level Approach
+We used TransformerLens to load GPT-2-XL (1.5B parameters, 48 layers, d_model=1600), extracted steering vectors via mean-difference of contrastive pair activations, and then performed controlled generation experiments measuring hidden state dynamics token-by-token.
+
+#### Why This Method?
+- **GPT-2-XL**: Well-supported by TransformerLens, fits on a single GPU, used in original ActAdd paper
+- **Mean-difference vectors**: Standard approach from CAA (Panickssery et al., 2024)
+- **TransformerLens hooks**: Enable precise per-token, per-layer measurement during generation
+- **Manual autoregressive loop**: Required for fine-grained control over steering application and teacher forcing
+
+### Implementation Details
+
+#### Tools and Libraries
+| Library | Version | Purpose |
+|---------|---------|---------|
+| PyTorch | 2.10.0 | Tensor computation |
+| TransformerLens | latest | Model loading, hook system |
+| steering-vectors | 0.12.2 | Reference (not used directly) |
+| NumPy | latest | Numerical analysis |
+| SciPy | latest | Curve fitting, statistical tests |
+| Matplotlib | latest | Visualization |
+
+#### Model
+GPT-2-XL (1.5B params, 48 layers, d_model=1600), loaded in float16 on CUDA GPU (NVIDIA RTX A6000, 49GB VRAM).
+
+#### Steering Vector Extraction
+For each behavior, we computed mean activations of the last token across all positive and negative examples at each target layer, then took the difference and normalized to unit norm:
+
+```
+v_layer = normalize(mean(pos_activations) - mean(neg_activations))
+```
+
+#### Hyperparameters
+| Parameter | Value | Selection Method |
+|-----------|-------|------------------|
+| Steering multiplier | 3.0 (default) | Standard from CAA |
+| Steering layer | 24 (middle, default) | Standard practice |
+| Steering duration K | 3 (default) | User-specified |
+| Post-steering tokens | 20 | Sufficient for decay measurement |
+| Decoding | Greedy (argmax) | Reproducibility |
+| Random seed | 42 | Standard |
+
+### Experimental Protocol
+
+#### Conditions
+For each prompt, we ran six conditions:
+
+1. **No Steering (baseline):** Normal generation, no vector applied
+2. **Continuous Steering:** Vector applied at every token
+3. **AR (Autoregressive):** Vector applied for K=3 tokens, then free generation
+4. **TF (Teacher-Forced, steered tokens):** Vector applied for K=3 tokens, then feed the same tokens AR generated but without the vector
+5. **TF_clean (Teacher-Forced, clean tokens):** Vector applied for K=3 tokens, then feed tokens from unsteered generation without the vector
+6. **Random (control):** Random unit vector with same multiplier applied for K=3 tokens
+
+#### Metrics (measured at each token position)
+| Metric | What it Measures |
+|--------|-----------------|
+| **Cosine similarity to SV** | How aligned the hidden state is with the steering direction |
+| **Projection onto SV** | Magnitude of hidden state along steering direction |
+| **KL from steered baseline** | How different the output distribution is from continuous steering |
+| **KL from unsteered baseline** | How different the output distribution is from no steering |
+
+#### Delta Metric
+We report the **delta** (steered condition minus unsteered baseline) of cosine similarity, which isolates the steering-specific effect from the natural variation in hidden state alignment.
+
+#### Reproducibility Information
+- Number of prompts per condition: 20 (Exp 1), 25 (Exp 2), 10 (Exp 3)
+- Random seed: 42
+- Hardware: NVIDIA RTX A6000 (49GB VRAM)
+- Total execution time: ~40 minutes for all experiments
+- All results saved to `results/` directory
+
+### Raw Results
+
+#### Experiment 1: Representational Decay Curves
+
+The delta (cosine similarity to steering direction, steered minus unsteered) across all three behaviors:
+
+**Truthful direction (best signal-to-noise):**
+
+| Token Position | Continuous | AR (steer 3, then free) | TF_clean |
+|---------------|------------|------------------------|----------|
+| -3 (steered) | +0.0187 | +0.0187 | +0.0187 |
+| -2 (steered) | +0.0190 | +0.0190 | +0.0190 |
+| -1 (steered) | +0.0184 | +0.0184 | +0.0184 |
+| 0 (first unsteered) | +0.0181 | **+0.0001** | +0.0000 |
+| 1 | +0.0186 | -0.0002 | +0.0000 |
+| 5 | +0.0188 | -0.0001 | -0.0001 |
+| 10 | +0.0160 | +0.0000 | -0.0001 |
+| 19 | +0.0197 | +0.0013 | -0.0001 |
+
+**Key observation:** The delta drops from ~0.019 to ~0.000 in **a single token** after steering removal. This is consistent across all three behaviors.
+
+#### Experiment 2: AR vs Teacher-Forced
+
+| Comparison | Cos. Sim. Delta | KL from Unsteered |
+|-----------|----------------|-------------------|
+| AR vs TF | **Identical** (d=0.000) | **Identical** (d=0.000) |
+| AR vs TF_clean | p=0.818, d=0.054 | **p&lt;0.0001, d=2.254** |
+
+AR and TF produce **exactly identical** hidden states and output distributions. This means teacher-forcing the same steered tokens produces the same result as generating them autoregressively — the steering vector has no persistent effect on hidden states beyond what&#39;s encoded in the token sequence.
+
+The KL divergence from unsteered shows a massive difference between AR and TF_clean (Cohen&#39;s d = 2.254): the steered tokens themselves carry behavioral information that keeps the model diverged from the unsteered path.
+
+#### Experiment 3: Ablations
+
+**Layer ablation** (positive_sentiment, K=3, mult=3.0):
+
+| Layer | Delta During Steering | Delta at pos=0 |
+|-------|----------------------|----------------|
+| 8 (early) | 0.0387 | ~0.000 |
+| 16 | 0.0292 | ~0.000 |
+| 24 (middle) | 0.0192 | ~0.000 |
+| 32 (late) | 0.0104 | ~0.000 |
+
+Earlier layers produce larger steering effects but ALL show instantaneous decay.
+
+**Multiplier ablation** (positive_sentiment, L=24, K=3):
+
+| Multiplier | Delta During Steering | Delta at pos=0 |
+|-----------|----------------------|----------------|
+| 1.0 | 0.006 | ~0.000 |
+| 2.0 | 0.010 | ~0.000 |
+| 3.0 | 0.019 | ~0.000 |
+| 5.0 | 0.030 | ~0.000 |
+
+Multiplier scales the effect during steering proportionally, but does not affect the instantaneous decay pattern.
+
+**Duration ablation** (positive_sentiment, L=24, mult=3.0):
+
+| K (steering duration) | Delta During Steering | Delta at pos=0 |
+|----------------------|----------------------|----------------|
+| 1 | 0.019 | ~0.000 |
+| 3 | 0.019 | ~0.000 |
+| 5 | 0.019 | ~0.000 |
+| 10 | 0.019 | ~0.000 |
+
+Steering for more tokens does not create any accumulated effect — decay is equally instant regardless of how long steering was applied.
+
+### Visualizations
+
+Key figures are saved to `figures/`:
+
+- `key_finding_representational_decay.png` — The central result: delta drops to zero in 1 token
+- `key_finding_behavioral_vs_representational.png` — Behavioral persistence (KL) vs representational decay (cosine sim)
+- `ablation_summary.png` — Layer, duration, and multiplier ablations
+- `decay_curves_*.png` — Full decay curves for each behavior
+
+## 5. Result Analysis
+
+### Key Findings
+
+1. **Representational decay is instantaneous.** The cosine similarity delta between steered and unsteered hidden states drops from ~0.019 to ~0.000 within a single generation step after steering removal. This was consistent across all three behaviors tested (truthful, positive sentiment, formal style), all layers tested (8, 16, 24, 32), all multiplier strengths (1x-5x), and all steering durations (K=1 to K=10).
+
+2. **AR and TF are identical.** Teacher-forcing the same tokens that were generated under steering produces exactly identical hidden states and output distributions as autoregressive generation. The steering vector leaves no residual effect on hidden states beyond what the generated tokens encode. Cohen&#39;s d = 0.000 for all metrics.
+
+3. **Behavioral persistence is entirely through generated tokens.** The KL divergence of AR/TF from the unsteered baseline remains elevated (half-life &gt; 75 tokens), but this is entirely attributable to the steered tokens remaining in the context. When clean tokens are teacher-forced instead (TF_clean), the KL divergence from unsteered is exactly zero, confirming no residual representational effect.
+
+4. **Earlier layers produce larger but equally ephemeral effects.** Steering at layer 8 produces ~2x the cosine similarity shift compared to layer 24, but both decay to zero within 1 token.
+
+5. **Multiplier and duration do not affect decay rate.** Whether you apply a 1x or 5x multiplier, whether you steer for 1 or 10 tokens, the decay is always instantaneous. The perturbation never &#34;accumulates&#34; in hidden states.
+
+### Hypothesis Testing Results
+
+| Hypothesis | Result | Evidence |
+|-----------|--------|----------|
+| **H1:** Cosine similarity decreases after removal | **Supported** | Delta drops from ~0.019 to ~0.000 |
+| **H2:** Decay follows exponential curve | **Partially supported** | Decay is faster than exponential — effectively a step function with half-life &lt; 1 token |
+| **H3:** TF decays faster than AR | **Not supported** — but for unexpected reason | AR and TF are identical; TF_clean shows no steering effect at all. The distinction isn&#39;t about decay rate but about whether steered tokens maintain influence through context |
+| **H4:** Decay rate varies across behaviors | **Partially supported** | All behaviors show instantaneous representational decay, but behavioral persistence (through tokens) varies |
+
+### Comparison to Literature
+
+Our findings align with and extend several papers from the literature review:
+
+- **SVF (Li et al., 2026)**: Found that &#34;static vectors become misaligned during generation&#34; — we confirm this and show it happens in a single step, not gradually
+- **PID Steering (Nguyen et al., 2025)**: Predicted steady-state error — we show the steady-state error is 100% for a removed vector (i.e., the perturbation is completely absorbed)
+- **Why Steering Works (Xu et al., 2026)**: Proposed that &#34;subsequent layers project activations back onto the manifold&#34; — our results confirm this projection is complete within one forward pass
+- **Bayesian Belief Dynamics (Bigelow et al., 2025)**: Our behavioral persistence finding supports their model of steering as shifting a prior that can be overridden by evidence (tokens)
+
+### Surprises and Insights
+
+1. **The instantaneous nature of decay was unexpected.** We expected exponential decay over ~5-10 tokens. Instead, the model&#39;s layer normalization and residual connections completely absorb the perturbation in a single forward pass.
+
+2. **AR and TF being identical was unexpected.** We expected teacher-forcing to isolate some residual hidden state effect. Instead, we found none — the model processes each new token based solely on the token sequence, with no &#34;memory&#34; of the perturbation that generated those tokens.
+
+3. **This explains why CAA uses continuous injection.** The literature always applies steering at every token position. Our results show this isn&#39;t just for robustness — it&#39;s necessary because a single-application perturbation is completely washed out in one step.
+
+### Limitations
+
+1. **Single model**: We tested only GPT-2-XL. Larger models with more layers may show different dynamics.
+2. **Single injection layer**: We steered at one layer per experiment. Multi-layer steering (as in CAA) might show different decay patterns.
+3. **Greedy decoding**: We used argmax decoding, which may produce different token-level dynamics than sampling.
+4. **Contrastive pair quality**: Our custom contrastive pairs may not produce optimal steering vectors. Using established datasets (e.g., CAA&#39;s curated pairs) might produce stronger effects.
+5. **Hidden state at steered layer only**: We measured cosine similarity only at the injection layer. Effects might propagate differently to other layers.
+6. **Small contrastive set**: 20 pairs per behavior is on the lower end; larger sets could produce more robust vectors.
+
+## 6. Conclusions
+
+### Summary
+Steering vector influence on hidden states decays **within a single generation step** after the vector is no longer applied. This is not gradual exponential decay but rather near-instantaneous absorption of the perturbation by the model&#39;s normalization and transformation layers. The lasting behavioral effects of short-term steering operate entirely through the autoregressive feedback loop: tokens generated under steering influence remain in the context and steer future generation, but the hidden states themselves carry no residual memory of the steering intervention.
+
+### Implications
+
+**For practitioners:**
+- Continuous steering application is essential for sustained hidden-state-level effects
+- If the goal is behavioral change through token generation, even brief steering (K=1-3 tokens) at the start of generation can create lasting effects through the generated token sequence
+- There is no benefit to &#34;gradual decay&#34; schedules — the decay is already maximally fast
+
+**For theorists:**
+- Transformer hidden states are remarkably robust to perturbation; the model&#39;s learned dynamics project perturbed states back onto the natural manifold within one step
+- The distinction between representational and behavioral persistence is critical for understanding steering
+- Steering influence is carried by tokens, not by hidden state &#34;momentum&#34;
+
+### Confidence in Findings
+**High confidence** in the main finding (instantaneous representational decay), supported by:
+- Consistent results across 3 behaviors, 4 layers, 4 multipliers, 4 durations
+- 20-25 prompts per condition
+- Clear signal-to-noise ratio in the truthful behavior (R² = 0.89 for decay fit)
+
+**Moderate confidence** in the generalizability claim, limited by single-model testing.
+
+## 7. Next Steps
+
+### Immediate Follow-ups
+1. **Multi-layer steering**: Apply vectors at multiple layers simultaneously (as in standard CAA) and test whether multi-layer injection creates more persistent effects
+2. **Larger models**: Test on Llama 2-7B and Gemma-2B to check whether scale affects decay dynamics
+3. **Non-greedy decoding**: Test with temperature sampling to see if stochastic sampling interacts with decay
+
+### Alternative Approaches
+- Measure hidden state dynamics at ALL layers (not just the injection layer) to trace how the perturbation propagates and decays through the full network
+- Use sparse autoencoders to decompose the steering effect into interpretable features and track which features persist
+
+### Open Questions
+1. Does multi-layer steering (injecting at layers 12-24 simultaneously) create any persistent hidden state effects?
+2. Is the instantaneous decay a property of normalization (LayerNorm/RMSNorm) specifically?
+3. Would KV-cache steering (modifying keys/values) show different decay dynamics since the cache persists?
+4. Does the decay behavior change with model scale?
+
+## References
+
+1. Turner et al. (2023). Activation Addition: Steering Language Models Without Optimization. arXiv:2308.10248
+2. Panickssery et al. (2024). Steering Llama 2 via Contrastive Activation Addition. arXiv:2312.06681
+3. Li et al. (2026). Steering Vector Fields. arXiv:2602.01654
+4. Nguyen et al. (2025). PID Steering. arXiv:2510.04309
+5. Xu et al. (2026). Why Steering Works. arXiv:2602.02343
+6. Bigelow et al. (2025). Belief Dynamics. arXiv:2511.00617
+7. Bachmann &amp; Nagarajan (2024). Pitfalls of Next-Token Prediction. arXiv:2403.06963
+8. Dang &amp; Ngo (2026). Selective Steering. arXiv:2601.19375
+9. Zou et al. (2023). Representation Engineering. arXiv:2310.01405
+10. Pres et al. (2024). Reliable Evaluation of Steering. arXiv:2410.17245
+
+
+════════════════════════════════════════════════════════════════════════════════
+                            RESEARCH PLAN
+════════════════════════════════════════════════════════════════════════════════
+
+# Research Plan: Steering Vector Decay
+
+## Motivation &amp; Novelty Assessment
+
+### Why This Research Matters
+Activation steering is increasingly used to control LLM behavior at inference time. However, the temporal dynamics of steering—specifically how quickly steering influence dissipates after the vector is no longer applied—remain poorly characterized. Understanding decay rates is critical for practitioners who want to minimize computational overhead (applying vectors only when needed) and for theorists seeking to understand how models process and &#34;wash out&#34; perturbations.
+
+### Gap in Existing Work
+The literature review reveals that:
+- **CAA** (Panickssery et al., 2024) applies vectors at every token position, implicitly acknowledging decay but never measuring it
+- **SVF** (Li et al., 2026) observes that static vectors become misaligned during generation but focuses on proposing adaptive solutions, not characterizing decay dynamics
+- **PID Steering** (Nguyen et al., 2025) proves P-control has steady-state error but doesn&#39;t empirically measure token-by-token decay curves
+- **No paper directly measures** how quickly hidden states revert after steering is removed partway through generation
+- **No paper compares** autoregressive vs. teacher-forced decay, which isolates representational decay from behavioral persistence
+
+### Our Novel Contribution
+We provide the **first direct empirical characterization** of steering vector decay dynamics:
+1. Token-by-token measurement of how hidden states lose steering influence after removal
+2. Quantification of decay functional form (exponential? power law?)
+3. Direct comparison of autoregressive vs. teacher-forced conditions, isolating two decay mechanisms: representational decay (hidden state geometry reverting) vs. behavioral persistence (steered tokens maintaining influence through context)
+
+### Experiment Justification
+- **Experiment 1 (Representational Decay Curves):** Directly tests the core hypothesis by measuring cosine similarity and projection of hidden states onto the steering direction at each post-removal token. This answers: &#34;How fast does the direct representational effect decay?&#34;
+- **Experiment 2 (Autoregressive vs. Teacher-Forced):** Tests whether the decay rate changes when we remove the feedback loop of steered tokens entering the context. This isolates representational decay from behavioral persistence.
+- **Experiment 3 (Ablations):** Tests generalizability across steering durations, layers, behaviors, and multiplier strengths.
+
+## Research Question
+After applying a steering vector v for the first K tokens of generation, how quickly does v&#39;s influence on hidden states decay over subsequent tokens? Does this decay rate differ when tokens generated under steering are teacher-forced (model sees them but v is not added) vs. when the model generates freely?
+
+## Hypothesis Decomposition
+1. **H1:** Cosine similarity between steered and unsteered hidden states decreases monotonically after steering removal (representational decay occurs)
+2. **H2:** Decay follows an approximately exponential curve (informed by PID steady-state error theory)
+3. **H3:** Decay is faster under teacher-forcing than autoregressive generation (because autoregressive generation maintains behavioral persistence through steered tokens in context)
+4. **H4:** Decay rate varies across behaviors (some concepts have more stable linear representations)
+
+## Proposed Methodology
+
+### Approach
+Use TransformerLens to load a small-to-medium model (GPT-2-XL or Pythia-1.4B), extract steering vectors from contrastive pairs using the steering-vectors library, then measure hidden state dynamics token-by-token under controlled conditions.
+
+**Model choice:** GPT-2-XL (1.5B params, 48 layers, d_model=1600). Well-supported by TransformerLens, fits easily on one A6000, and has been used in the original ActAdd paper. We&#39;ll also validate on Pythia-1.4B for generalizability.
+
+**Why not Llama 2?** While CAA provides pre-computed Llama 2 vectors, TransformerLens support for Llama 2 is less mature and the model is larger. Our focus is on measuring dynamics, not achieving SOTA steering.
+
+### Experimental Steps
+
+#### Step 1: Steering Vector Extraction
+- Create contrastive pairs for 3 behaviors: positive/negative sentiment, truthful/untruthful, formal/informal
+- Use steering-vectors library to extract mean-difference vectors at all layers
+- Validate vectors work by checking they shift logit distributions as expected
+
+#### Step 2: Baseline Characterization
+- For each behavior, generate 50 continuations from diverse prompts
+- Measure baseline hidden states (no steering) at all layers for all tokens
+- Establish metrics: cosine similarity to steering direction, projection magnitude, KL divergence of output distributions
+
+#### Step 3: Experiment 1 — Representational Decay Curves
+For each of {K=1, 3, 5} steering tokens:
+- Apply steering vector at layer L for the first K generated tokens
+- Remove steering vector and continue generating 20 more tokens
+- At each token position, record:
+  - Cosine similarity of hidden state (at steered layer) to the steering vector
+  - Projection of hidden state onto steering direction
+  - KL divergence of logit distribution vs. unsteered baseline
+  - Cosine similarity of full hidden state to the continuously-steered hidden state
+
+#### Step 4: Experiment 2 — Autoregressive vs. Teacher-Forced
+Three conditions, all with K=3 steered tokens followed by 20 post-removal tokens:
+1. **Autoregressive (AR):** Model generates freely after steering removal. Context includes tokens it generated under steering.
+2. **Teacher-Forced (TF):** After steering removal, we feed the same tokens that AR generated, but compute forward passes without adding the steering vector. This isolates representational decay by providing the same token sequence but without steering.
+3. **Teacher-Forced with Unsteered Tokens (TF-clean):** After steering removal, feed the tokens that would have been generated WITHOUT any steering. This measures whether steered tokens in context alone maintain steering influence.
+
+#### Step 5: Experiment 3 — Ablations
+- Vary steering layer: early (L=6), middle (L=24), late (L=42)
+- Vary multiplier strength: 0.5x, 1x, 2x, 4x
+- Vary steering duration: K=1, 3, 5, 10
+- Vary behavior type across all 3 behaviors
+- Measure decay half-life for each condition
+
+### Baselines
+- **No steering:** Baseline hidden states for comparison
+- **Continuous steering:** Steering applied at all tokens (upper bound of influence)
+- **Random vector:** Apply a random direction vector with same norm (control for perturbation vs. meaningful direction)
+
+### Evaluation Metrics
+1. **Cosine similarity to steering direction** (cos_sim): How aligned is the hidden state with v?
+2. **Projection magnitude** (proj): How much of the hidden state lies along v?
+3. **KL divergence from steered baseline** (KL_steered): How close is the output distribution to the continuously-steered model?
+4. **KL divergence from unsteered baseline** (KL_unsteered): How close has the output distribution reverted to unsteered?
+5. **Decay half-life** (t_half): Number of tokens for the metric to reach 50% of its initial (steered) value
+
+### Statistical Analysis Plan
+- Fit exponential decay curves: metric(t) = A * exp(-λt) + C
+- Compare decay rates (λ) across conditions using paired t-tests
+- Report 95% confidence intervals from bootstrap resampling (N=50 prompts per condition)
+- Bonferroni correction for multiple comparisons
+- Cohen&#39;s d effect sizes for AR vs. TF comparisons
+
+## Expected Outcomes
+- **Supports H1:** Cosine similarity to steering direction decreases monotonically after removal
+- **Supports H2:** Decay is approximately exponential with a possible non-zero asymptote
+- **Supports H3:** Teacher-forced decay is significantly faster (higher λ) than autoregressive decay
+- **Supports H4:** Different behaviors show different decay half-lives, with more &#34;natural&#34; directions decaying slower
+
+## Timeline and Milestones
+1. Environment setup + vector extraction: 20 min
+2. Baseline characterization: 15 min
+3. Experiment 1 (decay curves): 30 min
+4. Experiment 2 (AR vs TF): 30 min
+5. Experiment 3 (ablations): 30 min
+6. Analysis + visualization: 30 min
+7. Documentation: 20 min
+
+## Potential Challenges
+- TransformerLens generation with custom token-by-token hooks may need manual implementation
+- Teacher-forcing experiment requires careful implementation to feed correct tokens
+- Decay may be too fast (&lt; 3 tokens) or too slow (&gt; 50 tokens) to characterize well
+- GPU memory for caching activations across many tokens and conditions
+
+## Success Criteria
+1. Clear decay curves with quantified half-lives for at least 2 behaviors
+2. Statistical comparison of AR vs. TF decay rates with p &lt; 0.05
+3. Fitted decay model with R² &gt; 0.8
+4. Reproducible results across at least 2 random seeds
+
+
+════════════════════════════════════════════════════════════════════════════════
+                          LITERATURE REVIEW
+════════════════════════════════════════════════════════════════════════════════
+
+# Literature Review: Steering Vector Decay in Language Models
+
+## Research Hypothesis
+
+&gt; &#34;The influence of an activation steering vector **v** on model hidden states decays over subsequent generation steps after **v** is no longer added. The rate of this decay may differ if tokens generated with **v** are teacher-forced but not added to the hidden state.&#34;
+
+This review synthesizes 30 papers relevant to understanding, measuring, and mitigating the temporal decay of steering vector influence during autoregressive generation.
+
+---
+
+## 1. Foundations of Activation Steering
+
+### 1.1 The Linear Representation Hypothesis
+
+The theoretical grounding for steering vectors comes from the **linear representation hypothesis** (Park et al., 2023; arXiv:2311.03658): high-level concepts correspond to approximately linear directions in transformer activation space. Marks &amp; Tegmark (2023; arXiv:2310.06824) provide geometric evidence that truth values occupy a linear subspace, giving empirical support for the idea that adding a vector along a concept&#39;s direction should shift model behavior accordingly.
+
+### 1.2 Activation Addition (ActAdd)
+
+Turner et al. (2023; arXiv:2308.10248) introduced **Activation Addition (ActAdd)**, the foundational steering method. Key properties relevant to decay:
+
+- **Single injection**: ActAdd computes a steering vector from the activation difference between a positive and negative prompt pair, then adds it at a **single layer and token position** during the forward pass
+- **Layer-dependent effectiveness**: Effectiveness rises through early layers, peaks around layer 6 (for GPT-2-XL), then declines. This layer-dependent profile is itself a form of spatial decay
+- **Minimal data**: Requires as few as 2 contrast prompts
+- **Limitation**: The single-injection approach means the perturbation must propagate through all subsequent layers and token positions without reinforcement -- making it inherently subject to decay
+
+### 1.3 Contrastive Activation Addition (CAA)
+
+Panickssery et al. (2024; arXiv:2312.06681) developed **Contrastive Activation Addition (CAA)**, which differs from ActAdd in ways directly relevant to decay:
+
+- **Continuous injection**: Steering vectors are added at **all token positions after the instruction**, not just one. This amounts to continuous reinforcement that prevents within-sequence decay by constantly re-applying the perturbation
+- **Mean-difference vectors**: Uses hundreds of contrastive pairs (vs. ActAdd&#39;s single pair) and averages activation differences, producing more robust directions
+- **7 alignment behaviors tested**: sycophancy, survival-instinct, corrigibility, coordinate-other-ais, myopic-reward, hallucination, and refusal
+- **The design choice of continuous injection implicitly acknowledges that single-injection steering would decay** -- though the paper does not frame it this way
+
+### 1.4 Representation Engineering (RepE)
+
+Zou et al. (2023; arXiv:2310.01405) provided the broader **Representation Engineering** framework, establishing that concept directions can be extracted via various methods (PCA, mean difference, probing) and used for both reading and writing model representations. This framework treats steering as manipulating a learned representation space, making decay analogous to signal attenuation in that space.
+
+---
+
+## 2. Direct Evidence for Steering Vector Decay
+
+### 2.1 Steering Vector Fields (SVF) -- The Primary Decay Paper
+
+Li et al. (2026; arXiv:2602.01654) provide the **most direct evidence** for steering vector decay. Their key findings:
+
+- **Static vectors become misaligned**: During autoregressive generation, hidden states drift through activation space. A static steering vector computed at one point becomes increasingly misaligned with the concept direction at later token positions
+- **Long-form generation failure**: &#34;Reliability degrades in long-form generation&#34; with static steering vectors -- the effect diminishes as generation proceeds
+- **Proposed solution**: Replace static vectors with a **learned vector field** over activation space. A differentiable concept scoring function&#39;s local gradient defines the steering direction at each activation state
+- **Refreshing mechanism**: Re-compute the steering direction every K steps from the current hidden state, effectively counteracting decay by adapting to the model&#39;s evolving representation state
+- **Evaluation**: Uses MWE (Anthropic model-written evals) for MCQ evaluation and TruthfulQA for open-ended generation, demonstrating that static vectors degrade on generation tasks while vector fields maintain effectiveness
+
+**Relevance to hypothesis**: SVF directly demonstrates that steering influence decays during generation and proposes a mechanism (hidden state drift causing misalignment with a fixed direction). The decay is not about the vector&#39;s magnitude diminishing but about its **direction becoming irrelevant** as the model moves through activation space.
+
+### 2.2 PID Steering -- Control-Theoretic Decay Framework
+
+Nguyen et al. (2025; arXiv:2510.04309) provide the **strongest theoretical framework** for understanding decay, framing steering as a **control theory problem**:
+
+- **Existing methods are P-controllers**: ActAdd, CAA, and directional ablation are all equivalent to proportional-only controllers in a dynamical system where layers are time steps
+- **Proposition 1 (Steady-State Error)**: They formally prove that P-control steering has inherent **steady-state error** -- the activation state converges to a value that is offset from the target direction. This steady-state error is mathematically equivalent to incomplete steering, i.e., decay
+- **Integral term counteracts decay**: Adding an integral component (I-term) accumulates past steering errors and provides persistent corrections. This directly addresses the temporal persistence problem
+- **Derivative term prevents overshoot**: The D-term dampens oscillations that could occur from over-correction
+- **Results**: PID steering achieves better toxicity reduction than P-only methods on Gemma2-2B and Llama3-8B while maintaining generation quality
+
+**Relevance to hypothesis**: The PID framework formalizes decay as steady-state error in a P-control system. The integral term&#39;s necessity proves that single-application steering has inherent temporal limitations. This provides the most rigorous theoretical basis for our hypothesis.
+
+### 2.3 Belief Dynamics and Bayesian Decay
+
+Bigelow et al. (2025; arXiv:2511.00617) model steering through a **Bayesian lens**:
+
+- **Steering alters concept priors**: A steering vector shifts the model&#39;s prior probability for a concept
+- **ICL accumulates evidence**: In-context learning provides evidence that can reinforce or override the prior
+- **Evidence accumulation can overwhelm steering**: As the model processes more tokens, the accumulated evidence from the actual text can override the steering-induced prior shift -- a form of Bayesian decay
+- **Layer specificity**: Steering beliefs only works in specific layers, and the effective layers vary by concept
+
+**Relevance to hypothesis**: This provides an information-theoretic perspective on decay. The steering vector sets a prior, but as generation proceeds and the model generates tokens consistent with its original tendency, each token provides evidence against the steered behavior. The decay rate would then depend on the model&#39;s likelihood ratio between steered and unsteered behaviors.
+
+---
+
+## 3. Mechanisms of Decay
+
+### 3.1 Hidden State Drift
+
+The **Hidden Life of Tokens** (2025; arXiv:2502.03628) demonstrates that information in hidden states decays across generated tokens even without steering. Visual information injected into hidden states diminishes as more tokens are generated. This suggests that **any perturbation to hidden states -- including steering vectors -- will naturally attenuate** as the autoregressive process progresses and the model&#39;s own dynamics dominate.
+
+### 3.2 Error Propagation and Compounding
+
+The **Pitfalls of Next-Token Prediction** (Bachmann &amp; Nagarajan, 2024; arXiv:2403.06963) establishes the theoretical foundation for understanding why perturbations compound during autoregressive generation:
+
+- **Teacher forcing vs. autoregressive gap**: During training, models see ground-truth prefixes (teacher forcing). During generation, models condition on their own (potentially erroneous) outputs
+- **Exponential error accumulation**: Small perturbations in hidden states can compound exponentially through the autoregressive process
+- **Relevance to decay hypothesis**: This suggests two competing effects: (a) the steering perturbation itself may decay through hidden state drift, but (b) any behavioral changes caused by early steered tokens may persist or even amplify as the model conditions on its own steered outputs. This creates a distinction between **representational decay** (the vector&#39;s direct effect on hidden states) and **behavioral persistence** (the indirect effect through generated tokens)
+
+### 3.3 Token Divergence and Uncertainty
+
+**Multiple Token Divergence** (2025; arXiv:2512.22944) and **Token-level Uncertainty and Hidden State Dynamics** (2025; arXiv:2511.04527) provide additional mechanisms:
+
+- Divergence between steered and unsteered generation may accumulate or diminish depending on the model&#39;s confidence at each token position
+- High-uncertainty tokens may be more susceptible to steering influence, while low-uncertainty tokens (where the model is confident) may resist steering regardless of vector magnitude
+
+### 3.4 BOS Anchoring and Persistent Perturbation
+
+**Steering in the Shadows** (2025; arXiv:2511.17194) studies how perturbations to the BOS (beginning-of-sequence) token propagate through subsequent layers:
+
+- **BOS provides persistent bias**: Because the BOS token&#39;s representation is attended to by all subsequent tokens, perturbations to it provide a form of persistent steering
+- **Propagation patterns**: The study characterizes how perturbations spread through the attention mechanism, providing a map of how steering effects might be maintained or lost
+
+### 3.5 Norm Distortion as Decay Mechanism
+
+Dang &amp; Ngo (2026; arXiv:2601.19375) in their **Selective Steering** work identify a specific mechanism: adding a steering vector violates the activation norms expected by LayerNorm/RMSNorm, causing distribution shift. This norm violation compounds across layers (a spatial form of decay), and is especially problematic in sub-7B models. Their norm-preserving rotation approach demonstrates that maintaining geometric properties of activations prevents this specific decay pathway.
+
+---
+
+## 4. Why Steering Works (and Why It Might Stop Working)
+
+### 4.1 Unified View of Steering
+
+Xu et al. (2026; arXiv:2602.02343) provide a unifying perspective in **&#34;Why Steering Works&#34;**:
+
+- **Steering = dynamic bias adjustment**: Adding a steering vector is mathematically equivalent to adding a bias term to the model&#39;s weights at the target layer
+- **Activation manifold perspective**: Model activations live on a low-dimensional manifold. Steering pushes activations off this manifold. The model&#39;s subsequent layers then &#34;project&#34; the activations back onto the manifold -- this projection is what causes decay
+- **Preference-utility tradeoff**: Stronger steering increases target behavior but degrades utility. This tradeoff curve&#39;s shape directly relates to how aggressively the model&#39;s dynamics counteract the perturbation
+
+### 4.2 Steering Strength Analysis
+
+**&#34;Towards Understanding Steering Strength&#34;** (2026; arXiv:2506.06975) analyzes what determines steering effectiveness:
+
+- Effectiveness depends on the alignment between the steering direction and the model&#39;s internal concept representations
+- Some concepts have clearer linear directions than others, leading to variable steerability
+- The strength needed to overcome the model&#39;s default behavior varies by concept, suggesting that decay rates may also be concept-dependent
+
+### 4.3 Steerability Limitations
+
+Tan et al. (2024; arXiv:2407.12404) and Bas et al. (2025; arXiv:2511.18284) provide rigorous analyses:
+
+- **Variable steerability**: Some concepts are highly steerable, others are not. Spurious biases can contribute to apparent steerability
+- **Inverted-U curve**: Trait expression follows an inverted-U curve with steering coefficient -- too much steering actually reverses the effect. This suggests a nonlinear relationship between perturbation magnitude and behavioral outcome that complicates simple decay models
+- **50-behavior study**: Tests across 50 behaviors show that steering effectiveness is behavior-dependent, implying decay rates likely vary across behaviors too
+
+---
+
+## 5. Methods for Counteracting Decay
+
+### 5.1 Continuous Injection (CAA Approach)
+
+The simplest anti-decay method: add the steering vector at every token position (Panickssery et al., 2024). This prevents temporal decay by brute-force reinforcement but has limitations:
+
+- Does not adapt to changing context
+- May cause cumulative norm distortion
+- Prevents studying natural decay dynamics
+
+### 5.2 Context-Dependent Refreshing (SVF)
+
+Li et al. (2026) refresh the steering direction from the current hidden state. This adapts to hidden state drift but requires training a concept scoring function.
+
+### 5.3 PID Control (Integral Accumulation)
+
+Nguyen et al. (2025) accumulate past steering errors via an integral term. This provides persistent correction without requiring constant re-injection, making it more theoretically principled than continuous injection.
+
+### 5.4 Conditional Steering (CAST)
+
+Lee et al. (2024; arXiv:2409.05907) apply steering selectively based on input activation patterns. IBM&#39;s CAST (Conditional Activation Steering) extends this by applying steering only when a condition vector indicates relevance. This implicitly handles decay by re-checking at each position whether steering is still needed.
+
+### 5.5 Semantics-Adaptive Intervention (SADI)
+
+Wang et al. (2024; arXiv:2410.12299) adapt steering vectors to input semantics at inference time, addressing the problem that a fixed direction may not remain appropriate as context changes.
+
+### 5.6 Norm-Preserving Steering
+
+Dang &amp; Ngo (2026) apply steering via rotation rather than addition, preserving activation norms and preventing norm-distortion-based decay.
+
+### 5.7 SAE-Targeted Steering
+
+Chalnev et al. (2024; arXiv:2411.02193) and related work (arXiv:2411.02790) use Sparse Autoencoders to construct steering vectors that target specific features while minimizing off-target effects. By reducing unintended perturbations, these methods may produce steering that decays more slowly because it is better aligned with the model&#39;s natural representation structure.
+
+### 5.8 KV Cache Steering
+
+KV Cache Steering (2025; arXiv:2505.18735) modifies the key-value cache rather than hidden states. Since the KV cache persists across all subsequent tokens, this may provide inherently more persistent steering than hidden-state injection.
+
+---
+
+## 6. Evaluation Methodology
+
+### 6.1 MCQ vs. Generation Evaluation
+
+Pres et al. (2024; arXiv:2410.17245) demonstrate that steering effectiveness measured via multiple-choice questions (MCQs) may not predict generation-level effectiveness:
+
+- Short-response MCQ evaluations can overstate steering success
+- Long-form generation is a stricter test where decay becomes apparent
+- This distinction is critical for studying decay: MCQ evaluation measures the instantaneous effect, while generation evaluation measures the temporally-extended effect
+
+### 6.2 Token-Level Metrics for Decay
+
+Based on the literature, the following metrics are appropriate for measuring steering vector decay:
+
+1. **Logit gap over time**: P(target behavior) - P(anti-behavior) at each token position after steering removal
+2. **KL divergence from steered baseline**: How quickly the output distribution reverts to the unsteered model&#39;s distribution
+3. **Cosine similarity of hidden states**: Between the steered model&#39;s hidden states and the unsteered model&#39;s hidden states at each layer and position
+4. **Behavioral classifier scores**: Apply a behavior classifier to sliding windows of generated text
+
+### 6.3 Capabilities Preservation
+
+Multiple papers (CAA, WAS, SVF, Selective Steering) use MMLU to verify that steering does not degrade general capabilities. For decay experiments, this is important as a control: does the decay of steering influence correlate with recovery of baseline capabilities?
+
+---
+
+## 7. Synthesis: A Framework for Studying Decay
+
+### 7.1 Two Types of Decay
+
+The literature suggests two distinct mechanisms:
+
+1. **Representational decay**: The direct effect of the steering vector on hidden state geometry diminishes as the model processes more tokens. Caused by hidden state drift (SVF), norm re-normalization (Selective Steering), and the model&#39;s inherent tendency to project activations back onto its learned manifold (Why Steering Works).
+
+2. **Behavioral persistence**: Even after the representational effect decays, generated tokens that were influenced by steering remain in the context. These tokens provide &#34;evidence&#34; (in the Bayesian sense of Belief Dynamics) that may maintain the steered behavior even without continued representational intervention.
+
+### 7.2 The Teacher Forcing Distinction
+
+Our hypothesis specifically mentions that &#34;the rate of this decay may differ if tokens generated with v are teacher-forced but not added to the hidden state.&#34; This relates to:
+
+- **With autoregressive generation**: Steered tokens enter the context, potentially maintaining behavioral persistence even as representational decay occurs
+- **With teacher forcing (ground truth tokens)**: The model sees unsteered tokens in its context, so there is no behavioral persistence -- only representational decay is measured
+- This distinction is supported by Bachmann &amp; Nagarajan (2024) on the teacher-forcing gap and by the Bayesian framework of Bigelow et al. (2025)
+
+### 7.3 Predicted Decay Dynamics
+
+Combining the theoretical frameworks:
+
+1. **Immediate effect** (t=0): Full steering influence as measured by logit gap
+2. **Rapid initial decay** (t=1 to ~5): The model&#39;s LayerNorm and subsequent transformations begin counteracting the perturbation. PID steady-state error theory predicts convergence to a non-zero but reduced level
+3. **Plateau or continued decay** (t&gt;5): Depends on whether behavioral persistence (through autoregressive feedback) maintains the effect. Under teacher forcing, expect continued decay. Under autoregressive generation, may plateau
+4. **Concept-dependent variation**: Highly steerable concepts (clear linear directions) likely decay slower than weakly steerable ones
+
+### 7.4 Key Experimental Comparisons
+
+From the literature, the critical experimental conditions to compare are:
+
+| Condition | Representational Decay | Behavioral Persistence |
+|-----------|----------------------|----------------------|
+| Single injection (ActAdd-style) + autoregressive | Yes | Possible |
+| Single injection + teacher forcing | Yes | No |
+| Continuous injection (CAA-style) | Counteracted | Yes |
+| PID control | Actively corrected | Yes |
+| No intervention (baseline) | N/A | N/A |
+
+The difference between conditions 1 and 2 isolates the teacher-forcing effect predicted by our hypothesis.
+
+---
+
+## 8. Key Papers Summary Table
+
+| Paper | Year | Key Finding for Decay | Type |
+|-------|------|----------------------|------|
+| SVF (Li et al.) | 2026 | Static vectors misalign during generation | Direct evidence |
+| PID Steering (Nguyen et al.) | 2025 | P-control has inherent steady-state error | Theoretical framework |
+| ActAdd (Turner et al.) | 2023 | Layer-dependent effectiveness (spatial decay) | Foundation |
+| CAA (Panickssery et al.) | 2024 | Continuous injection prevents decay | Foundation |
+| Belief Dynamics (Bigelow et al.) | 2025 | Bayesian evidence accumulation overrides steering | Theoretical |
+| Why Steering Works (Xu et al.) | 2026 | Manifold projection counteracts perturbation | Mechanism |
+| Hidden Life of Tokens | 2025 | Information in hidden states naturally decays | Mechanism |
+| Pitfalls of Next-Token (Bachmann) | 2024 | Teacher forcing vs. autoregressive gap | Mechanism |
+| Selective Steering (Dang &amp; Ngo) | 2026 | Norm distortion accumulates across layers | Mechanism |
+| Pres et al. | 2024 | Short-response ≠ generation effectiveness | Evaluation |
+| Steering in the Shadows | 2025 | BOS perturbation propagation patterns | Mechanism |
+| Refusal Direction (Arditi et al.) | 2024 | Single direction mediates refusal | Concept structure |
+| SADI (Wang et al.) | 2024 | Fixed vectors fail across varying inputs | Anti-decay method |
+| Tan et al. | 2024 | Steerability is highly variable | Limitations |
+| Bas et al. | 2025 | Inverted-U curve with steering coefficient | Nonlinearity |
+
+---
+
+## 9. Open Questions
+
+1. **What is the functional form of decay?** Exponential? Power law? Does it vary by concept?
+2. **Is behavioral persistence sufficient to maintain steering without representational support?** If yes, at what confidence threshold does the model&#39;s own generation maintain the steered behavior?
+3. **How does model scale affect decay rate?** Larger models have more layers for the perturbation to propagate through but may also have more stable representation manifolds
+4. **Can decay rate predict steerability?** Concepts that decay slowly may be the ones most amenable to steering
+5. **How does quantization affect decay?** Reduced numerical precision may accelerate decay through rounding
+6. **What is the interaction between decay and attention?** Do attention patterns to steered tokens maintain or counteract the steering effect?
+
+---
+
+## References
+
+Full papers available in `papers/` directory. See `papers/README.md` for complete listing with file names and arXiv IDs.
+
+
+════════════════════════════════════════════════════════════════════════════════
+                          PAPER REQUIREMENTS
+════════════════════════════════════════════════════════════════════════════════
+
+Generate a complete academic paper with the following structure:
+
+1. TITLE
+   - Clear, specific, informative
+   - Should convey main finding or contribution
+
+2. AUTHOR
+   - Use this exact author line in the \author{} block: Ari Holtzman and Idea-Explorer
+
+3. ABSTRACT (150-250 words)
+   - Problem statement
+   - Approach
+   - Key results
+   - Significance
+
+4. INTRODUCTION
+   - Research problem and motivation
+   - Gap in existing work
+   - Our contribution (be specific)
+   - Paper organization
+
+5. RELATED WORK
+   - Organized by theme/approach
+   - Position our work relative to prior work
+   - Cite papers from literature review
+
+6. METHODOLOGY
+   - Clear description of approach
+   - Experimental setup
+   - Datasets used
+   - Evaluation metrics
+   - Baselines
+
+7. RESULTS
+   - Present results with tables and figures
+   - Statistical analysis
+   - Comparison to baselines
+   - Ablation studies (if applicable)
+
+8. DISCUSSION
+   - Interpretation of results
+   - Limitations
+   - Broader implications
+
+9. CONCLUSION
+   - Summary of contributions
+   - Key findings
+   - Future work
+
+10. REFERENCES
+   - BibTeX format
+   - All cited papers
+
+════════════════════════════════════════════════════════════════════════════════
+                          OUTPUT FORMAT
+════════════════════════════════════════════════════════════════════════════════
+
+Create a MODULAR LaTeX project with the following directory structure:
+
+paper_draft/
+├── main.tex              # Main file that imports all sections
+├── references.bib        # BibTeX references
+├── sections/
+│   ├── abstract.tex      # Abstract content
+│   ├── introduction.tex  # Introduction section
+│   ├── related_work.tex  # Related work section
+│   ├── methodology.tex   # Methodology section
+│   ├── results.tex       # Results section
+│   ├── discussion.tex    # Discussion section
+│   └── conclusion.tex    # Conclusion section
+├── figures/              # Directory for any generated figures
+├── tables/               # Directory for complex standalone tables
+└── appendix/             # Directory for appendix sections (if needed)
+
+INSTRUCTIONS:
+1. First, create the directory structure above (mkdir -p paper_draft/sections paper_draft/figures paper_draft/tables paper_draft/appendix)
+2. Write main.tex using the EXACT preamble for NEURIPS:
+
+   \documentclass{article}
+   \usepackage[final]{neurips_2025}  % NEURIPS style (neurips_2025.sty is in paper_draft/)
+   \usepackage[hidelinks]{hyperref}  % REQUIRED: clickable links
+   \usepackage{booktabs}  % REQUIRED: professional tables
+   \usepackage{graphicx}
+   \usepackage{amsmath,amssymb}
+
+   % Import command files
+   \input{commands/math}
+   \input{commands/general}
+   \input{commands/macros}
+
+   % Use this bibliography style:
+   \bibliographystyle{plainnat}
+
+   \author{Ari Holtzman and Idea-Explorer}
+
+   - Use \input{sections/...} to include each section
+   - Use \bibliography{references} for references
+3. Write each section file with COMPLETE content (no placeholders)
+4. Each section file should include its \section{} command
+5. Write references.bib with all citations in BibTeX format
+6. After writing all files, compile the paper:
+   cd paper_draft && pdflatex -interaction=nonstopmode main.tex && bibtex main && pdflatex -interaction=nonstopmode main.tex && pdflatex -interaction=nonstopmode main.tex
+
+This modular structure allows humans to easily:
+- Edit individual sections without navigating a large file
+- Track changes per section
+- Reuse sections across different paper versions
+
+════════════════════════════════════════════════════════════════════════════════
+                          QUALITY REQUIREMENTS
+════════════════════════════════════════════════════════════════════════════════
+
+- Academic tone throughout
+- All claims must be supported by data from the experiment report
+- Proper citations using \cite{} commands
+- Clear figures and tables with proper captions
+- NO placeholder text - every section must have real content
+- The paper MUST compile without errors
+- If compilation fails, debug and fix the LaTeX errors
+
+════════════════════════════════════════════════════════════════════════════════
+                          LAB WRITING STYLE
+════════════════════════════════════════════════════════════════════════════════
+
+Follow these lab-specific conventions to match our paper style:
+
+1. LANGUAGE STYLE:
+   - Use active voice: "We propose", "We examine", "We focus on"
+   - Be direct and confident: "Our main question is...", "We hypothesize that..."
+   - State things clearly and simply - prefer plain language over jargon
+   - Use bold questions as paragraph organizers: {\bf what is X?}
+   - Include specific quantitative claims: "8.97% over baseline"
+   - Avoid fancy wording: "utilize" → "use", "facilitate" → "help"
+
+2. INTRODUCTION STRUCTURE:
+   - Engaging hook (get to the point quickly)
+   - Problem importance
+   - Gap identification
+   - Your approach with method figure reference
+   - Quantitative preview of results
+   - Contribution bullets (3-4 items, action verbs)
+
+3. CONTRIBUTION LISTS:
+   \begin{itemize}[leftmargin=*,itemsep=0pt,topsep=0pt]
+       \item We propose...
+       \item We conduct...
+       \item We complement...
+   \end{itemize}
+
+4. MODULAR COMMANDS STRUCTURE:
+   Command templates are pre-copied to paper_draft/commands/:
+   - math.tex: Math notation macros
+   - general.tex: Formatting macros
+   - macros.tex: Project-specific term definitions (customize this for your paper)
+
+   In main.tex, include:
+   \input{commands/math}
+   \input{commands/general}
+   \input{commands/macros}
+
+5. REFERENCE CONVENTIONS:
+   Use reference macros from math.tex:
+   - \figref{fig:name} for "figure 1" (lowercase, in-sentence)
+   - \Figref{fig:name} for "Figure 1" (capitalized, start of sentence)
+   - \secref{sec:name} for "section 2"
+
+6. TEXT FORMATTING:
+   - Use \para{Header text} for bold paragraph headers
+   - Define method/dataset names with \textsc and \xspace:
+     \newcommand{\methodname}{\textsc{MethodName}\xspace}
+
+7. TABLE FORMATTING:
+   - Use booktabs package (no vertical lines)
+   - Use \resizebox{\textwidth}{!}{...} for wide tables
+   - Use @{} to remove padding at table edges
+   - Use \cmidrule(lr){x-y} for sub-headers
+   - Use \textsc{} for dataset/method names in headers
+   - Bold best results with {\bf ...}
+
+8. FIGURE FORMATTING:
+   - Use 0.32\textwidth for 3-column subfigures
+   - Use 0.95\linewidth for full-width figures
+   - Use \input{figures/legend} for shared legends
+   - Write self-contained captions explaining key observations
+
+9. RESULTS PRESENTATION:
+   - Define \increase and \decrease for colored arrows (green up, red down)
+   - Bold best results in tables
+   - Report confidence intervals when available
+
+10. ALGORITHM STYLING:
+    - Use algpseudocode with [noend]
+    - Use \triangleright for comments
+
+11. HYPERLINKS (REQUIRED):
+    - Always use \usepackage[hidelinks]{hyperref} or with colored links
+    - All citations, section refs, figure refs, table refs must be clickable
+    - This is essential for reader navigation
+
+════════════════════════════════════════════════════════════════════════════════
+                          WORKFLOW: REVIEW AND REFLECT
+════════════════════════════════════════════════════════════════════════════════
+
+Before calling finish, you MUST complete these review steps:
+
+1. REVIEW RESOURCES (at the start):
+   - Read .claude/skills/paper-writer/SKILL.md for detailed guidance
+   - Study templates/paper_writing/lab_style_guide.md for style conventions
+   - Browse paper_examples/ for formatting and language patterns
+
+2. SELF-REFLECTION (before finishing):
+   After writing all sections, review your work against these criteria:
+
+   LANGUAGE CHECK:
+   - [ ] Is the writing clear and jargon-free?
+   - [ ] Are claims specific with quantitative support?
+   - [ ] Is active voice used throughout?
+
+   FORMATTING CHECK:
+   - [ ] Does main.tex include \input{commands/math}, \input{commands/general}, \input{commands/macros}?
+   - [ ] Is hyperref package included for clickable references?
+   - [ ] Do tables use booktabs (no vertical lines)?
+   - [ ] Are best results bolded in tables?
+   - [ ] Are figures/tables properly captioned?
+
+   STRUCTURE CHECK:
+   - [ ] Does introduction follow: hook → importance → gap → approach → preview → contributions?
+   - [ ] Are contribution bullets specific with action verbs?
+   - [ ] Does the paper compile without errors?
+
+3. FIX ISSUES:
+   - Address any issues found in the self-reflection
+   - Re-compile and verify the PDF looks correct
+
+Only after completing this review should you consider the paper finished.
